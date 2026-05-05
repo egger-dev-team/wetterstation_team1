@@ -1,0 +1,16 @@
+apiVersion: 1
+
+datasources:
+  - name: InfluxDB
+    type: influxdb
+    access: proxy
+    url: http://influxdb:8086
+    jsonData:
+      version: Flux
+      organization: wetterstation
+      defaultBucket: wetterstation
+      tlsSkipVerify: true
+    secureJsonData:
+      token: CHANGE_ME_TOKEN   # must match DOCKER_INFLUXDB_INIT_ADMIN_TOKEN in docker-compose.yml
+    isDefault: true
+    editable: true

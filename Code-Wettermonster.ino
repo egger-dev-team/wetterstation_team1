@@ -52,26 +52,26 @@ void sendToWettermonster() {
 	int i = 0;
 	while(WiFi.status() != WL_CONNECTED && i <= 5)
 	{
-   i++;
-   Serial.println("WiFi nicht verbunden. Versuche neu zu verbinden...");
-   WiFi.disconnect();
-   WiFi.mode(WIFI_OFF);
-   WiFi.mode(WIFI_STA);
-   WiFi.begin(ssid, password);
-   delay(1000);
+		i++;
+		Serial.println("WiFi nicht verbunden. Versuche neu zu verbinden...");
+		WiFi.disconnect();
+		WiFi.mode(WIFI_OFF);
+		WiFi.mode(WIFI_STA);
+		WiFi.begin(ssid, password);
+		delay(1000);
 	}
 
 	if(i > 5)
 	{
-   Serial.println("Verbindnung zu " + String(ssid) + " fehlgeschlagen. Neustart.");
-   ESP.restart();
+		Serial.println("Verbindnung zu " + String(ssid) + " fehlgeschlagen. Neustart.");
+		ESP.restart();
 	}
 
-	if (WiFi.status() == WL_CONNECTED && client.connect("upload.wettermonster.de", 80)) // Verbindung zum Server aufbauen
+	if (WiFi.status() == WL_CONNECTED && client.connect("DESKTOP-EF01O14", 3000)) // Verbindung zum Server aufbauen
 	{
 
-		Serial.println ("Verbunden mit upload.wettermonster.de");
-		client.print("GET /speichern.php");
+		Serial.println("Verbunden mit upload.wettermonster.de");
+		client.print("GET /save");
 		client.print("?id=");
 		client.print(id);
 		client.print("&schluessel=");

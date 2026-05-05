@@ -1,0 +1,46 @@
+services:
+  influxdb:
+    image: influxdb:2
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: Egger#123     # change this
+      DOCKER_INFLUXDB_INIT_ORG: wetterstation
+      DOCKER_INFLUXDB_INIT_BUCKET: wetterstation
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: CHANGE_ME_TOKEN     # change this
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    depends_on:
+      - influxdb
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: Egger#123     # change this
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    restart: unless-stopped
+
+  wetterstation-api:
+    build: ./api
+    ports:
+      - "3000:3000"
+    depends_on:
+      - influxdb
+    environment:
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: Egger#123     # must match DOCKER_INFLUXDB_INIT_ADMIN_TOKEN above
+      INFLUX_ORG: wetterstation
+      INFLUX_BUCKET: wetterstation
+    restart: unless-stopped
+
+volumes:
+  influxdb-data:
+  grafana-data:
