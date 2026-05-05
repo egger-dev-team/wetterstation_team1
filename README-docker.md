@@ -51,6 +51,20 @@ Find your PC's local IP with `ipconfig` (Windows) and look for the IPv4 address 
 | **InfluxDB** | http://localhost:8086 | admin / CHANGE_ME_PASSWORD |
 | **API** | http://localhost:3000/save | — |
 
+## Forecast + Rule Engine
+
+The API generates a daily 7-day forecast and stores it in the InfluxDB measurement `wetterstation_forecast`.
+
+- Auto-run: once on API startup, then every 24 hours
+- Manual trigger: `GET http://localhost:3000/forecast/weekly`
+- Read latest raw rows: `GET http://localhost:3000/forecast/latest`
+
+Each forecast day contains predicted weather metrics and rule-based recommendations:
+
+- `workout` (e.g. indoor circuit, outdoor HIIT, easy run)
+- `drink` (e.g. isotonic drink, protein shake, tea)
+- `rationale` (human-readable reason)
+
 ## Creating a Grafana Dashboard
 
 1. Open Grafana → **Dashboards → New Dashboard → Add visualization**
@@ -66,6 +80,7 @@ from(bucket: "wetterstation")
 
 4. Repeat for each field (`luftfeuchtigkeit`, `luftdruck`, `niederschlag`, `windgeschwindigkeit`, `helligkeit`)
 5. Choose **Time series** as the panel type
+6. For forecast/recommendation panels, use the queries from `README-grafana-query.md` against measurement `wetterstation_forecast`
 
 ## Stopping the stack
 
