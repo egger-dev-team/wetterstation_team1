@@ -28,7 +28,7 @@ const char* ssid = "TP-Link_C667";
 const char* password = "67729821";
 const char* id = "1356598";
 const char* key = "15244122";
-const int interval = 10;
+const int interval = 900;
 
 float temperature;
 float humidity;
@@ -67,10 +67,10 @@ void sendToWettermonster() {
 		ESP.restart();
 	}
 
-	if (WiFi.status() == WL_CONNECTED && client.connect("DESKTOP-EF01O14", 3000)) // Verbindung zum Server aufbauen
+	if (WiFi.status() == WL_CONNECTED && client.connect("192.168.1.10", 3000)) // Verbindung zum Server aufbauen
 	{
 
-		Serial.println("Verbunden mit upload.wettermonster.de");
+		Serial.println("Verbunden mit DESKTOP-EF01O14");
 		client.print("GET /save");
 		client.print("?id=");
 		client.print(id);
@@ -91,8 +91,8 @@ void sendToWettermonster() {
 		client.print("&helligkeit=");
 		client.print(luminosity);
 		client.println(" HTTP/1.1");
-		client.println("Host: upload.wettermonster.de");
-		client.println("User-Agent: Wettermonster");
+		client.println("Host: 192.168.1.10:3000");
+		client.println("User-Agent: itStep");
 		client.println("Accept: text/html");
 		client.println();
 
