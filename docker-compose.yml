@@ -9,7 +9,7 @@ services:
       DOCKER_INFLUXDB_INIT_PASSWORD: Egger#123     # change this
       DOCKER_INFLUXDB_INIT_ORG: wetterstation
       DOCKER_INFLUXDB_INIT_BUCKET: wetterstation
-      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: CHANGE_ME_TOKEN     # change this
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: Egger#123     # change this
     volumes:
       - influxdb-data:/var/lib/influxdb2
     restart: unless-stopped

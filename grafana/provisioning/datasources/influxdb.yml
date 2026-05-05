@@ -11,6 +11,6 @@ datasources:
       defaultBucket: wetterstation
       tlsSkipVerify: true
     secureJsonData:
-      token: CHANGE_ME_TOKEN   # must match DOCKER_INFLUXDB_INIT_ADMIN_TOKEN in docker-compose.yml
+      token: Egger#123   # must match DOCKER_INFLUXDB_INIT_ADMIN_TOKEN in docker-compose.yml
     isDefault: true
     editable: true
