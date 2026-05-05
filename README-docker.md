@@ -82,6 +82,27 @@ from(bucket: "wetterstation")
 5. Choose **Time series** as the panel type
 6. For forecast/recommendation panels, use the queries from `README-grafana-query.md` against measurement `wetterstation_forecast`
 
+## Importing Example CSV into InfluxDB
+
+The file `influx-example.csv` contains an Annotated CSV example for the measurement `wetterstation`.
+
+Import it with the Influx CLI:
+
+```bash
+influx write \
+  --host http://localhost:8086 \
+  --org wetterstation \
+  --bucket wetterstation \
+  --token YOUR_TOKEN \
+  --file ./influx-example.csv
+```
+
+The CSV already matches the API field structure:
+
+- tags: `id`, `windrichtung`
+- timestamp: `_time`
+- fields: `temperatur`, `luftfeuchtigkeit`, `luftdruck`, `niederschlag`, `windgeschwindigkeit`, `helligkeit`
+
 ## Stopping the stack
 
 ```bash
