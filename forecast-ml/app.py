@@ -28,6 +28,7 @@ INFLUX_BUCKET = os.environ.get("INFLUX_BUCKET", "wetterstation")
 FORECAST_MEASUREMENT = "wetterstation_ml_forecast"
 HORIZON_DAYS = 7
 LOOKBACK_DAYS = 365
+HISTORICAL_WRITE_DAYS = 30   # days of historical basis data written alongside the forecast
 RESAMPLE_HOURS = 3          # downsample to 3h before fitting to save memory
 SEASON_PERIOD = 56          # 8 steps/day × 7 days = weekly seasonality at 3h resolution
 
@@ -346,6 +347,109 @@ def _do_train() -> None:
 
 
 # ---------------------------------------------------------------------------
+# LLM-based daily recommendations
+# ---------------------------------------------------------------------------
+
+LLM_API_KEY  = os.environ.get("LLM_API_KEY", "")
+LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1")
+LLM_MODEL    = os.environ.get("LLM_MODEL", "gpt-4o-mini")
+
+_SYSTEM_PROMPT = (
+    "Du bist ein freundlicher Alltagsassistent für St. Johann in Tirol. "
+    "Gib basierend auf den Wetterdaten kurze, praktische Empfehlungen auf Deutsch. "
+    "Sei kreativ bei der Aktivitätsempfehlung (z.B. 'Blumen schneiden', 'Freibad', "
+    "'Schule schwänzen', 'Wandern', 'Friseur', 'Regentag-Film-Marathon', 'Strand', etc.). "
+    "Antworte AUSSCHLIESSLICH mit gültigem JSON (kein Markdown, keine Erklärung) im Format:\n"
+    '{"workout":"<Sport mit Dauer>","drink":"<Getränk mit Menge>",'
+    '"aktivitaet":"<Freizeitvorschlag>","rationale":"<1 kurzer Satz>"}'
+)
+
+
+def _llm_recommend(day: dict) -> dict:
+    """Call the configured LLM to generate daily recommendations. Falls back to rule-based."""
+    if LLM_API_KEY:
+        try:
+            import json as _json
+            from openai import OpenAI as _OpenAI
+            llm = _OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
+            user_msg = (
+                f"Datum: {day['date']}\n"
+                f"Temperatur: {day.get('temperatur', '?')} °C\n"
+                f"Luftfeuchtigkeit: {day.get('luftfeuchtigkeit', '?')} %\n"
+                f"Niederschlag: {day.get('niederschlag', '?')} mm\n"
+                f"Windgeschwindigkeit: {day.get('windgeschwindigkeit', '?')} km/h\n"
+                f"Helligkeit: {day.get('helligkeit', '?')} lux\n"
+                f"Windrichtung: {day.get('windrichtung', '?')}\n"
+            )
+            resp = llm.chat.completions.create(
+                model=LLM_MODEL,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user",   "content": user_msg},
+                ],
+                temperature=0.8,
+                max_tokens=200,
+            )
+            result = _json.loads(resp.choices[0].message.content)
+            for k in ("workout", "drink", "aktivitaet", "rationale"):
+                if k not in result:
+                    raise ValueError(f"Missing key in LLM response: {k}")
+            log.info("LLM recommendation for %s: %s", day["date"], result.get("aktivitaet"))
+            return result
+        except Exception as exc:
+            log.warning("LLM recommendation failed (%s) — using rule-based fallback", exc)
+
+    return _rule_based_recommend(day)
+
+
+def _rule_based_recommend(day: dict) -> dict:
+    """Deterministic rule-based fallback when no LLM key is configured."""
+    temp  = float(day.get("temperatur", 15) or 15)
+    rain  = float(day.get("niederschlag", 0) or 0)
+    wind  = float(day.get("windgeschwindigkeit", 10) or 10)
+    hum   = float(day.get("luftfeuchtigkeit", 60) or 60)
+
+    if rain > 8 or wind > 60:
+        workout = "Yoga / Stretch (30 min, drinnen)"
+        aktivitaet = "Film-Marathon oder Buchclub – Regentag genießen"
+    elif rain > 3:
+        workout = "Indoor-Training oder leichtes Dehnen (30 min)"
+        aktivitaet = "Schirm mitnehmen, Erledigungen (Friseur, Einkaufen)"
+    elif temp > 25 and rain < 1:
+        workout = "Schwimmen oder Radfahren (45 min, früh morgens)"
+        aktivitaet = "Freibad oder Strand – Sonnencreme nicht vergessen"
+    elif temp > 18 and wind < 25:
+        workout = "Joggen oder Wandern (40 min)"
+        aktivitaet = "Gartenarbeit, Blumen schneiden oder Fahrradtour"
+    elif temp > 10 and rain < 2:
+        workout = "Spaziergang oder leichtes Radfahren (30 min)"
+        aktivitaet = "Wanderung oder Ausflug in die Berge"
+    elif temp < 3:
+        workout = "Indoor-Training / Fitness (30 min)"
+        aktivitaet = "Drinnen bleiben, heiße Schokolade und gutes Buch"
+    else:
+        workout = "Spaziergang (30 min)"
+        aktivitaet = "Alltag-Erledigungen (Arzt, Einkaufen, Friseur)"
+
+    if temp > 28:
+        drink = "Wasser + Elektrolyte (700 ml)"
+    elif temp > 20:
+        drink = "Wasser (500 ml)"
+    elif rain > 3 or hum > 80:
+        drink = "Heißer Tee (400 ml)"
+    else:
+        drink = "Wasser mit Zitrone (400 ml)"
+
+    return {
+        "workout":    workout,
+        "drink":      drink,
+        "aktivitaet": aktivitaet,
+        "rationale":  "Standardplan für die aktuellen Wetterbedingungen.",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -373,8 +477,7 @@ def train():
     })
 
 
-@app.route("/forecast")
-def forecast():
+def _do_generate_forecast():
     with _lock:
         if not _status["trained"]:
             return jsonify({"error": "Models not trained yet. POST /train first."}), 503
@@ -505,27 +608,274 @@ def forecast():
         write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=point)
         result_rows.append(rec)
 
-    client.close()
+    # --- write historical basis data (past HISTORICAL_WRITE_DAYS days) ---
+    try:
+        hist_om = _fetch_open_meteo(lookback_days=HISTORICAL_WRITE_DAYS)
+
+        # delete old historical basis points
+        try:
+            client.delete_api().delete(
+                start="1970-01-01T00:00:00Z",
+                stop="2100-01-01T00:00:00Z",
+                predicate=f'_measurement="{FORECAST_MEASUREMENT}" AND source="historical_basis"',
+                bucket=INFLUX_BUCKET,
+                org=INFLUX_ORG,
+            )
+        except Exception as exc:
+            log.warning("Could not delete old historical basis points: %s", exc)
+
+        # merge Open-Meteo archive with local sensor data (same logic as training)
+        # Only fetch local data for the HISTORICAL_WRITE_DAYS window to keep it fast.
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=HISTORICAL_WRITE_DAYS)
+        qapi = client.query_api()
+        hist_dfs: dict = {}
+        for field in NUMERIC_FIELDS:
+            df_om = hist_om.get(field, pd.DataFrame(columns=["ds", "y"]))
+            df_local = _query_field(qapi, field)
+            df_local = df_local[df_local["ds"] >= cutoff]
+            df = pd.concat([df_om, df_local], ignore_index=True)
+            df = df.sort_values("ds").drop_duplicates("ds", keep="last").reset_index(drop=True)
+            hist_dfs[field] = df
+
+        df_wd_om = hist_om.get("windrichtung", pd.DataFrame(columns=["ds", "y"]))
+        df_wd_hist = _query_field(qapi, "windrichtung", agg_fn="last")
+        df_wd_hist = df_wd_hist[df_wd_hist["ds"] >= cutoff]
+        df_wd_hist = pd.concat([df_wd_om, df_wd_hist], ignore_index=True)
+        df_wd_hist = df_wd_hist.sort_values("ds").drop_duplicates("ds", keep="last").reset_index(drop=True)
+
+        # pivot all fields into one DataFrame indexed by timestamp
+        combined: pd.DataFrame | None = None
+        for field in NUMERIC_FIELDS:
+            df_f = hist_dfs[field].rename(columns={"y": field}).set_index("ds")
+            combined = df_f if combined is None else combined.join(df_f, how="outer")
+        if not df_wd_hist.empty:
+            combined = (
+                combined.join(
+                    df_wd_hist.rename(columns={"y": "windrichtung"}).set_index("ds"),
+                    how="outer",
+                ) if combined is not None
+                else df_wd_hist.rename(columns={"y": "windrichtung"}).set_index("ds")
+            )
+
+        # Collect all points in a list and write in a single batch (much faster than one-by-one)
+        hist_points = []
+        if combined is not None:
+            for ts, row in combined.iterrows():
+                point = (
+                    Point(FORECAST_MEASUREMENT)
+                    .tag("source", "historical_basis")
+                    .time(ts.to_pydatetime().replace(tzinfo=timezone.utc), "s")
+                )
+                has_field = False
+                for field in NUMERIC_FIELDS:
+                    if field in row.index and not pd.isna(row[field]):
+                        point = point.field(field, round(float(row[field]), 2))
+                        has_field = True
+                if "windrichtung" in row.index and not pd.isna(row["windrichtung"]):
+                    point = point.field("windrichtung", str(row["windrichtung"]))
+                    has_field = True
+                if has_field:
+                    hist_points.append(point)
+
+        if hist_points:
+            write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=hist_points)
+
+        hist_count = len(hist_points)
+        log.info("Historical basis written: %d hourly points → %s (source=historical_basis)",
+                 hist_count, FORECAST_MEASUREMENT)
+    except Exception as exc:
+        log.exception("Could not write historical basis data")
+        hist_count = 0
+
+    # --- build daily summary ---
     log.info("Forecast written: %d hourly points → %s (source=%s)",
              len(result_rows), FORECAST_MEASUREMENT, "NWP+bias" if nwp_source else "HW-fallback")
-    # Return a daily summary for the JSON response
     df_summary = pd.DataFrame(result_rows)
     df_summary["date"] = pd.to_datetime(df_summary["timestamp"]).dt.date
     summary = []
     for date, grp in df_summary.groupby("date"):
-        row = {"date": str(date)}
+        row = {"date": str(date), "dateIso": str(date) + "T00:00:00.000Z"}
         for field in NUMERIC_FIELDS:
             if field in grp.columns:
                 row[field] = round(grp[field].mean(), 2)
         if "windrichtung" in grp.columns:
             row["windrichtung"] = grp["windrichtung"].value_counts().index[0]
         summary.append(row)
+
+    # --- generate LLM recommendations and write daily points to InfluxDB ---
+    try:
+        # delete old recommendation points first
+        client.delete_api().delete(
+            start="1970-01-01T00:00:00Z",
+            stop="2100-01-01T00:00:00Z",
+            predicate=f'_measurement="{FORECAST_MEASUREMENT}" AND source="recommendation"',
+            bucket=INFLUX_BUCKET,
+            org=INFLUX_ORG,
+        )
+    except Exception as exc:
+        log.warning("Could not delete old recommendation points: %s", exc)
+
+    rec_points = []
+    for row in summary:
+        rec = _llm_recommend(row)
+        row.update(rec)
+        ts = datetime.strptime(row["date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        rec_points.append(
+            Point(FORECAST_MEASUREMENT)
+            .tag("source", "recommendation")
+            .time(ts, "s")
+            .field("workout",    rec["workout"])
+            .field("drink",      rec["drink"])
+            .field("aktivitaet", rec["aktivitaet"])
+            .field("rationale",  rec["rationale"])
+        )
+
+    if rec_points:
+        try:
+            write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=rec_points)
+            log.info("Recommendations written: %d daily points → %s", len(rec_points), FORECAST_MEASUREMENT)
+        except Exception as exc:
+            log.warning("Could not write recommendation points: %s", exc)
+
+    client.close()
     return jsonify({
         "status": "ok",
         "forecast_source": "NWP+bias_correction" if nwp_source else "HW_statistical_fallback",
         "measurement": FORECAST_MEASUREMENT,
         "hourly_points": len(result_rows),
+        "historical_points": hist_count,
         "forecast": summary,
+    })
+
+
+@app.route("/forecast/generate", methods=["POST"])
+def forecast_generate():
+    """Trigger forecast generation: fetch NWP data, apply bias correction,
+    write 168 hourly points to InfluxDB. Intended for scheduler/admin use."""
+    return _do_generate_forecast()
+
+
+@app.route("/forecast")
+def forecast_read():
+    """Return the currently stored 7-day forecast from InfluxDB, including daily
+    LLM recommendations. No computation is performed — safe to call frequently."""
+    client = build_client()
+    try:
+        qapi = client.query_api()
+
+        # --- hourly prophet points ---
+        flux_hourly = (
+            f'from(bucket: "{INFLUX_BUCKET}")\n'
+            f'  |> range(start: -1h, stop: 9d)\n'
+            f'  |> filter(fn: (r) => r._measurement == "{FORECAST_MEASUREMENT}")\n'
+            f'  |> filter(fn: (r) => r["source"] == "prophet")\n'
+            f'  |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")\n'
+            f'  |> sort(columns: ["_time"])'
+        )
+        tables = qapi.query(flux_hourly)
+        rows = []
+        for tbl in tables:
+            for rec in tbl.records:
+                row = {"timestamp": rec.get_time().isoformat()}
+                for field in NUMERIC_FIELDS:
+                    v = rec.values.get(field)
+                    if v is not None:
+                        row[field] = round(float(v), 2)
+                wd = rec.values.get("windrichtung")
+                if wd is not None:
+                    row["windrichtung"] = str(wd)
+                rows.append(row)
+
+        # --- daily recommendation points ---
+        flux_rec = (
+            f'from(bucket: "{INFLUX_BUCKET}")\n'
+            f'  |> range(start: -2d, stop: 9d)\n'
+            f'  |> filter(fn: (r) => r._measurement == "{FORECAST_MEASUREMENT}")\n'
+            f'  |> filter(fn: (r) => r["source"] == "recommendation")\n'
+            f'  |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")\n'
+            f'  |> sort(columns: ["_time"])'
+        )
+        rec_tables = qapi.query(flux_rec)
+        recommendations: dict[str, dict] = {}
+        for tbl in rec_tables:
+            for rec in tbl.records:
+                date_key = rec.get_time().strftime("%Y-%m-%d")
+                recommendations[date_key] = {
+                    "workout":    rec.values.get("workout", ""),
+                    "drink":      rec.values.get("drink", ""),
+                    "aktivitaet": rec.values.get("aktivitaet", ""),
+                    "rationale":  rec.values.get("rationale", ""),
+                }
+    finally:
+        client.close()
+
+    if not rows:
+        return jsonify({
+            "error": "No forecast data available. Call POST /forecast/generate first."
+        }), 404
+
+    # Build daily summary from the stored hourly points, merge recommendations
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["timestamp"]).dt.date
+    summary = []
+    for date, grp in df.groupby("date"):
+        day = {"date": str(date)}
+        for field in NUMERIC_FIELDS:
+            if field in grp.columns:
+                day[field] = round(grp[field].mean(), 2)
+        if "windrichtung" in grp.columns:
+            day["windrichtung"] = grp["windrichtung"].value_counts().index[0]
+        day.update(recommendations.get(str(date), {}))
+        summary.append(day)
+
+    return jsonify({
+        "status": "ok",
+        "hourly_points": len(rows),
+        "hourly": rows,
+        "forecast": summary,
+    })
+
+
+@app.route("/history")
+def history_read():
+    """Return the last HISTORICAL_WRITE_DAYS days of historical basis data from InfluxDB."""
+    client = build_client()
+    try:
+        qapi = client.query_api()
+        flux = (
+            f'from(bucket: "{INFLUX_BUCKET}")\n'
+            f'  |> range(start: -{HISTORICAL_WRITE_DAYS}d, stop: now())\n'
+            f'  |> filter(fn: (r) => r._measurement == "{FORECAST_MEASUREMENT}")\n'
+            f'  |> filter(fn: (r) => r["source"] == "historical_basis")\n'
+            f'  |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")\n'
+            f'  |> sort(columns: ["_time"])'
+        )
+        tables = qapi.query(flux)
+        rows = []
+        for tbl in tables:
+            for rec in tbl.records:
+                row = {"timestamp": rec.get_time().isoformat()}
+                for field in NUMERIC_FIELDS:
+                    v = rec.values.get(field)
+                    if v is not None:
+                        row[field] = round(float(v), 2)
+                wd = rec.values.get("windrichtung")
+                if wd is not None:
+                    row["windrichtung"] = str(wd)
+                rows.append(row)
+    finally:
+        client.close()
+
+    if not rows:
+        return jsonify({
+            "error": "No historical data available. Call POST /forecast/generate first."
+        }), 404
+
+    return jsonify({
+        "status": "ok",
+        "historical_days": HISTORICAL_WRITE_DAYS,
+        "points": len(rows),
+        "hourly": rows,
     })
 
 
@@ -534,7 +884,7 @@ def train_and_forecast():
     _do_train()
     if _status["error"]:
         return jsonify({"error": _status["error"]}), 500
-    return forecast()
+    return _do_generate_forecast()
 
 
 # ---------------------------------------------------------------------------
