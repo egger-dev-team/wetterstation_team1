@@ -1,0 +1,7 @@
+flask
+statsmodels
+requests
+influxdb-client
+pandas
+numpy
+scipy

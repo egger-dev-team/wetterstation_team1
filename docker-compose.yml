@@ -41,6 +41,19 @@ services:
       INFLUX_BUCKET: wetterstation
     restart: unless-stopped
 
+  forecast-ml:
+    build: ./forecast-ml
+    ports:
+      - "5001:5000"
+    depends_on:
+      - influxdb
+    environment:
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: Egger#123     # must match DOCKER_INFLUXDB_INIT_ADMIN_TOKEN above
+      INFLUX_ORG: wetterstation
+      INFLUX_BUCKET: wetterstation
+    restart: unless-stopped
+
 volumes:
   influxdb-data:
   grafana-data:

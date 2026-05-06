@@ -237,7 +237,7 @@ app.get('/save', async (req, res) => {
   try {
     const point = new Point('wetterstation')
       .tag('id', q.id || 'unknown')
-      .tag('windrichtung', q.windrichtung || '')
+      .stringField('windrichtung', q.windrichtung || '')
       .floatField('temperatur', parseFloat(q.temperatur))
       .floatField('luftfeuchtigkeit', parseFloat(q.luftfeuchtigkeit))
       .floatField('luftdruck', parseFloat(q.luftdruck))
@@ -276,7 +276,7 @@ app.get('/forecast/weekly', async (_req, res) => {
 app.get('/forecast/latest', async (_req, res) => {
   const fluxQuery = `
 from(bucket: "${process.env.INFLUX_BUCKET}")
-  |> range(start: -14d)
+  |> range(start: -1d, stop: 8d)
   |> filter(fn: (r) => r._measurement == "${FORECAST_MEASUREMENT}")
   |> filter(fn: (r) => r.source == "${FORECAST_TAG}")
   |> sort(columns: ["_time"], desc: false)
