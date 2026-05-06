@@ -5,3 +5,4 @@ influxdb-client
 pandas
 numpy
 scipy
+openai>=1.0.0

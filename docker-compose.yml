@@ -52,6 +52,11 @@ services:
       INFLUX_TOKEN: Egger#123     # must match DOCKER_INFLUXDB_INIT_ADMIN_TOKEN above
       INFLUX_ORG: wetterstation
       INFLUX_BUCKET: wetterstation
+      # LLM recommendation settings (OpenAI-compatible API)
+      # Set LLM_API_KEY in a .env file (never commit secrets)
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.groq.com/openai/v1}
+      LLM_MODEL: ${LLM_MODEL:-llama-3.3-70b-versatile}
     restart: unless-stopped
 
 volumes:
