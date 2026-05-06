@@ -28,7 +28,7 @@ const char* ssid = "TP-Link_C667";
 const char* password = "67729821";
 const char* id = "1356598";
 const char* key = "15244122";
-const int interval = 10;
+const int interval = 60;
 
 float temperature;
 float humidity;
